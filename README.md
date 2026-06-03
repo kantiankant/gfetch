@@ -15,9 +15,9 @@ sudo/doas make install
 
 # Checklist
 
-[] Multi-monitor fetch 
-[] Multi-partiton fetch 
-[] Wayland compositor/X window manager fetch
+- [] Multi-monitor fetch 
+- [] Multi-partiton fetch 
+- [] Wayland compositor/X window manager fetch
 
 # License
 
