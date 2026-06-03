@@ -1,7 +1,5 @@
 /*
- * fetch.c: the classic Glenda Fetch re-implemented 
- * in C for Linux systems. More or less this is kinda
- * incomplete and all so enjoy I guess.
+ * gfetch.c: the classic Glenda Fetch re-implemented in C for Linux systems.
  */
 
 #define _GNU_SOURCE
@@ -13,10 +11,7 @@
 #include <sys/utsname.h>
 #include <sys/sysinfo.h>
 #include <sys/statvfs.h>
-#include <sys/ioctl.h>
-#include <linux/fb.h>
 #include <dirent.h>
-#include <errno.h>
 
 /* Helpers */
 
@@ -81,13 +76,10 @@ shorten_cpu(char *s)
 	if   ((p = strstr(s, " CPU"))  != NULL) memmove(p, p+4, strlen(p+4)+1);
 	if   ((p = strstr(s, " @ "))   != NULL) *p = '\0';
 
-	/* AMD: zap " X-Core Processor" suffix */
 	if   ((p = strstr(s, "-Core")) != NULL) *p = '\0';
 
-	/* tidy any double-spaces left behind */
 	while ((p = strstr(s, "  ")) != NULL) memmove(p, p+1, strlen(p+1)+1);
 
-	/* trim trailing space */
 	size_t n = strlen(s);
 	while (n > 0 && s[n-1] == ' ') s[--n] = '\0';
 }
@@ -195,7 +187,7 @@ get_shell(char *buf, size_t sz)
 }
 
 
-/* disk */
+/* Disk */
 
 static void
 get_disk(char *buf, size_t sz)
@@ -214,29 +206,69 @@ get_disk(char *buf, size_t sz)
 	snprintf(buf, sz, "%.1f / %.1f GiB", used_gib, total_gib);
 }
 
-/*
- * Resolution (reads from /dev/fb0 via ioctl)
- * TODO: Swap with GPU because no one gives a
- * damn about one's screen resolution
- * */
+/* 
+ * GPU
+ */
 
 static void
-get_resolution(char *buf, size_t sz)
+get_gpu(char *buf, size_t sz)
 {
-	int fd;
-	struct fb_var_screeninfo vinfo;
+	FILE *f;
+	char line[256];
+	char driver[64] = {0};
+	char pci_id[16] = {0};
 
-	fd = open("/dev/fb0", O_RDONLY);
-	if (fd >= 0) {
-		if (ioctl(fd, FBIOGET_VSCREENINFO, &vinfo) == 0) {
-			snprintf(buf, sz, "%ux%u", vinfo.xres, vinfo.yres);
-			close(fd);
-			return;
+	char uevent_path[64];
+	for (int card = 0; card <= 1; card++) {
+		snprintf(uevent_path, sizeof(uevent_path),
+		         "/sys/class/drm/card%d/device/uevent", card);
+		f = fopen(uevent_path, "r");
+		if (f) break;
+	}
+	if (!f) {
+		snprintf(buf, sz, "unknown");
+		return;
+	}
+	while (fgets(line, sizeof(line), f)) {
+		chomp(line);
+		if (strncmp(line, "DRIVER=", 7) == 0) {
+			snprintf(driver, sizeof(driver), "%.63s", line + 7);
+		} else if (strncmp(line, "PCI_ID=", 7) == 0) {
+			snprintf(pci_id, sizeof(pci_id), "%.9s", line + 7);
 		}
-		close(fd);
+	}
+	fclose(f);
+
+	if (!pci_id[0] && !driver[0]) {
+		snprintf(buf, sz, "unknown");
+		return;
 	}
 
-	snprintf(buf, sz, "unavailable");
+	const char *vendor = "";
+	if      (strncasecmp(pci_id, "8086", 4) == 0) vendor = "Intel";
+	else if (strncasecmp(pci_id, "1002", 4) == 0) vendor = "AMD";
+	else if (strncasecmp(pci_id, "10de", 4) == 0) vendor = "NVIDIA";
+
+	char model[128] = {0};
+	char label_path[64];
+	snprintf(label_path, sizeof(label_path),
+	         "/sys/class/drm/card%d/device/label",
+	         strstr(uevent_path, "card1") ? 1 : 0);
+	f = fopen(label_path, "r");
+	if (f) {
+		if (fgets(model, sizeof(model), f))
+			chomp(model);
+		fclose(f);
+	}
+
+	if (model[0])
+		snprintf(buf, sz, "%s", model);
+	else if (vendor[0] && driver[0])
+		snprintf(buf, sz, "%s (%s)", vendor, driver);
+	else if (vendor[0])
+		snprintf(buf, sz, "%s", vendor);
+	else
+		snprintf(buf, sz, "%s", driver);
 }
 
 /* Glenda the rabbit */
@@ -251,7 +283,7 @@ static const char *rabbit[] = {
 	"   c?\".UJ    cpu: %s",
 	"             ram: %s / %s GiB",
 	"             disk: %s",
-	"             res: %s",
+	"             gpu: %s",
 	NULL
 };
 
@@ -263,7 +295,7 @@ main(void)
 	char os[128], kernel[128], cpu[256];
 	char shell[64], uptime[64];
 	char ram_used[32], ram_total[32];
-	char disk[64], res[64];
+	char disk[64], gpu[128];
 	char hostname[64] = {0};
 	const char *user;
 
@@ -274,7 +306,7 @@ main(void)
 	get_uptime(uptime, sizeof(uptime));
 	get_ram(ram_used, sizeof(ram_used), ram_total, sizeof(ram_total));
 	get_disk(disk, sizeof(disk));
-	get_resolution(res, sizeof(res));
+	get_gpu(gpu, sizeof(gpu));
 
 	gethostname(hostname, sizeof(hostname) - 1);
 	user = getenv("USER");
@@ -290,7 +322,7 @@ main(void)
 	printf(rabbit[6], cpu); putchar('\n');
 	printf(rabbit[7], ram_used, ram_total); putchar('\n');
 	printf(rabbit[8], disk); putchar('\n');
-	printf(rabbit[9], res); putchar('\n');
+	printf(rabbit[9], gpu); putchar('\n');
 
 	return 0;
 }
