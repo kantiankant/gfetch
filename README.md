@@ -5,7 +5,7 @@ gfetch is a re-implementation of [Glenda Fetch by arwm](https://github.com/arwn/
 # Installation
 
 ```sh
-make (add 'STATIC=1 to statically link it)
+make (add 'STATIC=1' to statically link it)
 sudo/doas make install   
 ```
 
