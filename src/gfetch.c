@@ -1,5 +1,7 @@
 /*
- * fetch.c: the classic Glenda Fetch re-implemented in C for Linux systems 
+ * fetch.c: the classic Glenda Fetch re-implemented 
+ * in C for Linux systems. More or less this is kinda
+ * incomplete and all so enjoy I guess.
  */
 
 #define _GNU_SOURCE
@@ -71,6 +73,26 @@ get_kernel(char *buf, size_t sz)
 /* CPU */
 
 static void
+shorten_cpu(char *s)
+{
+	char *p;
+	while ((p = strstr(s, "(R)"))  != NULL) memmove(p, p+3, strlen(p+3)+1);
+	while ((p = strstr(s, "(TM)")) != NULL) memmove(p, p+4, strlen(p+4)+1);
+	if   ((p = strstr(s, " CPU"))  != NULL) memmove(p, p+4, strlen(p+4)+1);
+	if   ((p = strstr(s, " @ "))   != NULL) *p = '\0';
+
+	/* AMD: zap " X-Core Processor" suffix */
+	if   ((p = strstr(s, "-Core")) != NULL) *p = '\0';
+
+	/* tidy any double-spaces left behind */
+	while ((p = strstr(s, "  ")) != NULL) memmove(p, p+1, strlen(p+1)+1);
+
+	/* trim trailing space */
+	size_t n = strlen(s);
+	while (n > 0 && s[n-1] == ' ') s[--n] = '\0';
+}
+
+static void
 get_cpu(char *buf, size_t sz)
 {
 	FILE *f;
@@ -89,6 +111,7 @@ get_cpu(char *buf, size_t sz)
 				while (*colon == ' ') colon++;
 				chomp(colon);
 				snprintf(buf, sz, "%s", colon);
+				shorten_cpu(buf);
 				fclose(f);
 				return;
 			}
@@ -174,13 +197,6 @@ get_shell(char *buf, size_t sz)
 
 /* disk */
 
-/*
- * TODO: Add mountpoints as seperate listings,
- * so users can actually see their /home &
- * root partitions like they would on a 
- * fastfetch setup.
- * */
-
 static void
 get_disk(char *buf, size_t sz)
 {
@@ -200,8 +216,8 @@ get_disk(char *buf, size_t sz)
 
 /*
  * Resolution (reads from /dev/fb0 via ioctl)
- * TODO:Add multiple listings multiple monitors for monitors and their names. 
- * Fastfetch does this well, so I'll probably reference that
+ * TODO: Swap with GPU because no one gives a
+ * damn about one's screen resolution
  * */
 
 static void
@@ -220,7 +236,7 @@ get_resolution(char *buf, size_t sz)
 		close(fd);
 	}
 
-	snprintf(buf, sz, "unavailable (no fbdev access)");
+	snprintf(buf, sz, "unavailable");
 }
 
 /* Glenda the rabbit */
@@ -228,14 +244,14 @@ get_resolution(char *buf, size_t sz)
 static const char *rabbit[] = {
 	"             %s@%s",
 	"    (\\(\\     -----------",
-	"   j\". ..    os:      %s",
-	"   (  . .)   kernel:  %s",
-	"   |   \xc2\xb0 \xc2\xa1   shell:   %s",
-	"   \xc2\xbf     ;   uptime:  %s",
-	"   c?\".UJ    cpu:     %s",
-	"             ram:     %s / %s GiB",
-	"             disk:    %s",
-	"             res:     %s",
+	"   j\". ..    os: %s",
+	"   (  . .)   kernel: %s",
+	"   |   \xc2\xb0 \xc2\xa1   shell: %s",
+	"   \xc2\xbf     ;   uptime: %s",
+	"   c?\".UJ    cpu: %s",
+	"             ram: %s / %s GiB",
+	"             disk: %s",
+	"             res: %s",
 	NULL
 };
 
