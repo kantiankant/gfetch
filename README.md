@@ -4,10 +4,24 @@ gfetch is a re-implementation of [Glenda Fetch by arwm](https://github.com/arwn/
 
 # Installation
 
+<details>
+<summary>conventional make</summary>
+
 ```sh
 make (add 'STATIC=1' to statically link it)
 sudo/doas make install   
 ```
+</details>
+
+<details>
+<summary>Plan9Port mk</summary>
+
+```sh
+mk
+sudo/doas mk install   
+```
+</details>
+
 
 # Preview
 
