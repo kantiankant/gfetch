@@ -1,6 +1,4 @@
-/*
- * gfetch.c: the classic Glenda Fetch re-implemented in C for Linux systems.
- */
+/* gfetch.c: the classic Glenda Fetch re-implemented in C for Linux systems. */
 
 #define _GNU_SOURCE
 #include <stdio.h>
