@@ -1,15 +1,16 @@
-/* gfetch.c: the classic Glenda Fetch re-implemented in C for Linux systems. */
+/* gfetch.c: the classic Glenda Fetch re-implemented in C for FreeBSD.*/
 
-#define _GNU_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
+#include <time.h>
+#include <sys/param.h>
+#include <sys/sysctl.h>
 #include <sys/utsname.h>
-#include <sys/sysinfo.h>
 #include <sys/statvfs.h>
-#include <dirent.h>
+#include <sys/types.h>
 
 /* Helpers */
 
@@ -26,31 +27,11 @@ chomp(char *s)
 static void
 get_os(char *buf, size_t sz)
 {
-	FILE *f;
-	char line[256];
-	char name[128] = {0};
-
-	f = fopen("/etc/os-release", "r");
-	if (!f) f = fopen("/usr/lib/os-release", "r");
-	if (f) {
-		while (fgets(line, sizeof(line), f)) {
-			if (strncmp(line, "PRETTY_NAME=", 12) == 0) {
-				char *val = line + 12;
-				if (*val == '"') val++;
-				chomp(val);
-				size_t l = strlen(val);
-				if (l && val[l-1] == '"') val[l-1] = '\0';
-				snprintf(name, sizeof(name), "%s", val);
-				break;
-			}
-		}
-		fclose(f);
-	}
-
-	if (!name[0])
-		snprintf(name, sizeof(name), "Linux");
-
-	snprintf(buf, sz, "%s", name);
+	struct utsname u;
+	if (uname(&u) == 0)
+		snprintf(buf, sz, "%s %s", u.sysname, u.release);
+	else
+		snprintf(buf, sz, "FreeBSD");
 }
 
 static void
@@ -85,30 +66,16 @@ shorten_cpu(char *s)
 static void
 get_cpu(char *buf, size_t sz)
 {
-	FILE *f;
-	char line[256];
+	char model[256] = {0};
+	size_t len = sizeof(model);
 
-	f = fopen("/proc/cpuinfo", "r");
-	if (!f) {
+	if (sysctlbyname("hw.model", model, &len, NULL, 0) != 0) {
 		snprintf(buf, sz, "unknown");
 		return;
 	}
-	while (fgets(line, sizeof(line), f)) {
-		if (strncmp(line, "model name", 10) == 0) {
-			char *colon = strchr(line, ':');
-			if (colon) {
-				colon++;
-				while (*colon == ' ') colon++;
-				chomp(colon);
-				snprintf(buf, sz, "%s", colon);
-				shorten_cpu(buf);
-				fclose(f);
-				return;
-			}
-		}
-	}
-	fclose(f);
-	snprintf(buf, sz, "unknown");
+	chomp(model);
+	snprintf(buf, sz, "%s", model);
+	shorten_cpu(buf);
 }
 
 /* RAM */
@@ -116,33 +83,44 @@ get_cpu(char *buf, size_t sz)
 static void
 get_ram(char *used_buf, size_t used_sz, char *total_buf, size_t total_sz)
 {
-	FILE *f;
-	char line[256];
-	unsigned long long total = 0, memfree = 0, buffers = 0;
-	unsigned long long cached = 0, sreclaimable = 0, shmem = 0;
+	u_long physmem = 0;
+	u_int  pagesize = 0;
+	u_int  free_count = 0, inactive_count = 0, cache_count = 0;
+	size_t len;
 
-	f = fopen("/proc/meminfo", "r");
-	if (!f) {
+	len = sizeof(physmem);
+	if (sysctlbyname("hw.physmem", &physmem, &len, NULL, 0) != 0) {
 		snprintf(used_buf,  used_sz,  "?");
 		snprintf(total_buf, total_sz, "?");
 		return;
 	}
-	while (fgets(line, sizeof(line), f)) {
-		if      (strncmp(line, "MemTotal:",     9)  == 0) sscanf(line + 9,  "%llu", &total);
-		else if (strncmp(line, "MemFree:",      8)  == 0) sscanf(line + 8,  "%llu", &memfree);
-		else if (strncmp(line, "Buffers:",      8)  == 0) sscanf(line + 8,  "%llu", &buffers);
-		else if (strncmp(line, "Cached:",       7)  == 0 &&
-		         strncmp(line, "SwapCached:",  11)  != 0) sscanf(line + 7,  "%llu", &cached);
-		else if (strncmp(line, "SReclaimable:", 13) == 0) sscanf(line + 13, "%llu", &sreclaimable);
-		else if (strncmp(line, "Shmem:",        6)  == 0) sscanf(line + 6,  "%llu", &shmem);
-	}
-	fclose(f);
 
-	unsigned long long usedDiff = memfree + cached + sreclaimable + buffers;
-	unsigned long long used_kb  = (total >= usedDiff) ? total - usedDiff : total - memfree;
-	used_kb += shmem;
-	double total_gib = total   / (1024.0 * 1024.0);
-	double used_gib  = used_kb / (1024.0 * 1024.0);
+	len = sizeof(pagesize);
+	sysctlbyname("vm.stats.vm.v_page_size", &pagesize, &len, NULL, 0);
+	if (pagesize == 0)
+		pagesize = getpagesize();
+
+	len = sizeof(free_count);
+	sysctlbyname("vm.stats.vm.v_free_count", &free_count, &len, NULL, 0);
+
+	len = sizeof(inactive_count);
+	sysctlbyname("vm.stats.vm.v_inactive_count", &inactive_count, &len, NULL, 0);
+
+	len = sizeof(cache_count);
+	sysctlbyname("vm.stats.vm.v_cache_count", &cache_count, &len, NULL, 0);
+
+	unsigned long long total_bytes = (unsigned long long)physmem;
+	unsigned long long reclaimable_pages =
+	    (unsigned long long)free_count +
+	    (unsigned long long)inactive_count +
+	    (unsigned long long)cache_count;
+	unsigned long long reclaimable_bytes = reclaimable_pages * pagesize;
+
+	unsigned long long used_bytes =
+	    (total_bytes >= reclaimable_bytes) ? total_bytes - reclaimable_bytes : 0;
+
+	double total_gib = total_bytes / (1024.0 * 1024.0 * 1024.0);
+	double used_gib  = used_bytes  / (1024.0 * 1024.0 * 1024.0);
 	snprintf(used_buf,  used_sz,  "%.2f", used_gib);
 	snprintf(total_buf, total_sz, "%.2f", total_gib);
 }
@@ -152,12 +130,18 @@ get_ram(char *used_buf, size_t used_sz, char *total_buf, size_t total_sz)
 static void
 get_uptime(char *buf, size_t sz)
 {
-	struct sysinfo si;
-	if (sysinfo(&si) != 0) {
+	struct timeval boottime;
+	size_t len = sizeof(boottime);
+
+	if (sysctlbyname("kern.boottime", &boottime, &len, NULL, 0) != 0) {
 		snprintf(buf, sz, "unknown");
 		return;
 	}
-	long up = si.uptime;
+
+	time_t now = time(NULL);
+	long up = (long)(now - boottime.tv_sec);
+	if (up < 0) up = 0;
+
 	int days  = up / 86400;
 	int hours = (up % 86400) / 3600;
 	int mins  = (up % 3600)  / 60;
@@ -184,7 +168,6 @@ get_shell(char *buf, size_t sz)
 	}
 }
 
-
 /* Disk */
 
 static void
@@ -204,69 +187,59 @@ get_disk(char *buf, size_t sz)
 	snprintf(buf, sz, "%.1f / %.1f GiB", used_gib, total_gib);
 }
 
-/* 
- * GPU
- */
+/* GPU */
 
 static void
 get_gpu(char *buf, size_t sz)
 {
-	FILE *f;
-	char line[256];
-	char driver[64] = {0};
-	char pci_id[16] = {0};
+	FILE *p;
+	char line[512];
+	char class_line[512] = {0};
+	char device_line[512] = {0};
+	int found = 0;
 
-	char uevent_path[64];
-	for (int card = 0; card <= 1; card++) {
-		snprintf(uevent_path, sizeof(uevent_path),
-		         "/sys/class/drm/card%d/device/uevent", card);
-		f = fopen(uevent_path, "r");
-		if (f) break;
-	}
-	if (!f) {
+	p = popen("pciconf -lv 2>/dev/null", "r");
+	if (!p) {
 		snprintf(buf, sz, "unknown");
 		return;
 	}
-	while (fgets(line, sizeof(line), f)) {
-		chomp(line);
-		if (strncmp(line, "DRIVER=", 7) == 0) {
-			snprintf(driver, sizeof(driver), "%.63s", line + 7);
-		} else if (strncmp(line, "PCI_ID=", 7) == 0) {
-			snprintf(pci_id, sizeof(pci_id), "%.9s", line + 7);
+
+	while (fgets(line, sizeof(line), p)) {
+		if (line[0] != '\t' && line[0] != ' ') {
+			/* new device tag: reset any partial block */
+			class_line[0] = '\0';
+			device_line[0] = '\0';
+			continue;
+		}
+		char *trimmed = line;
+		while (*trimmed == '\t' || *trimmed == ' ') trimmed++;
+
+		if (strncmp(trimmed, "class=", 6) == 0) {
+			snprintf(class_line, sizeof(class_line), "%s", trimmed);
+		} else if (strncmp(trimmed, "device=", 7) == 0) {
+			snprintf(device_line, sizeof(device_line), "%s", trimmed);
+		}
+
+		if (class_line[0] && device_line[0]) {
+			/* pciconf reports display controllers as class=0x03xxxx */
+			if (strstr(class_line, "0x03") != NULL) {
+				char *q1 = strchr(device_line, '\'');
+				char *q2 = q1 ? strchr(q1 + 1, '\'') : NULL;
+				if (q1 && q2 && q2 > q1) {
+					*q2 = '\0';
+					snprintf(buf, sz, "%s", q1 + 1);
+					found = 1;
+					break;
+				}
+			}
+			class_line[0] = '\0';
+			device_line[0] = '\0';
 		}
 	}
-	fclose(f);
+	pclose(p);
 
-	if (!pci_id[0] && !driver[0]) {
+	if (!found)
 		snprintf(buf, sz, "unknown");
-		return;
-	}
-
-	const char *vendor = "";
-	if      (strncasecmp(pci_id, "8086", 4) == 0) vendor = "Intel";
-	else if (strncasecmp(pci_id, "1002", 4) == 0) vendor = "AMD";
-	else if (strncasecmp(pci_id, "10de", 4) == 0) vendor = "NVIDIA";
-
-	char model[128] = {0};
-	char label_path[64];
-	snprintf(label_path, sizeof(label_path),
-	         "/sys/class/drm/card%d/device/label",
-	         strstr(uevent_path, "card1") ? 1 : 0);
-	f = fopen(label_path, "r");
-	if (f) {
-		if (fgets(model, sizeof(model), f))
-			chomp(model);
-		fclose(f);
-	}
-
-	if (model[0])
-		snprintf(buf, sz, "%s", model);
-	else if (vendor[0] && driver[0])
-		snprintf(buf, sz, "%s (%s)", vendor, driver);
-	else if (vendor[0])
-		snprintf(buf, sz, "%s", vendor);
-	else
-		snprintf(buf, sz, "%s", driver);
 }
 
 /* Glenda the rabbit */
