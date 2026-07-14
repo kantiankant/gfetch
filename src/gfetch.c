@@ -187,57 +187,59 @@ get_disk(char *buf, size_t sz)
 	snprintf(buf, sz, "%.1f / %.1f GiB", used_gib, total_gib);
 }
 
-/* GPU */
 
+/* GPU */
+ 
 static void
 get_gpu(char *buf, size_t sz)
 {
 	FILE *p;
 	char line[512];
-	char class_line[512] = {0};
+	char vendor_line[512] = {0};
 	char device_line[512] = {0};
+	int in_display_block = 0;
 	int found = 0;
-
+ 
 	p = popen("pciconf -lv 2>/dev/null", "r");
 	if (!p) {
 		snprintf(buf, sz, "unknown");
 		return;
 	}
-
+ 
 	while (fgets(line, sizeof(line), p)) {
 		if (line[0] != '\t' && line[0] != ' ') {
-			/* new device tag: reset any partial block */
-			class_line[0] = '\0';
+			char *class_pos = strstr(line, "class=0x03");
+			in_display_block = (class_pos != NULL);
+			vendor_line[0] = '\0';
 			device_line[0] = '\0';
 			continue;
 		}
+ 
+		if (!in_display_block)
+			continue;
+ 
 		char *trimmed = line;
 		while (*trimmed == '\t' || *trimmed == ' ') trimmed++;
-
-		if (strncmp(trimmed, "class=", 6) == 0) {
-			snprintf(class_line, sizeof(class_line), "%s", trimmed);
-		} else if (strncmp(trimmed, "device=", 7) == 0) {
+ 
+		if (strncmp(trimmed, "vendor", 6) == 0 && strchr(trimmed, '=')) {
+			snprintf(vendor_line, sizeof(vendor_line), "%s", trimmed);
+		} else if (strncmp(trimmed, "device", 6) == 0 && strchr(trimmed, '=')) {
 			snprintf(device_line, sizeof(device_line), "%s", trimmed);
-		}
-
-		if (class_line[0] && device_line[0]) {
-			/* pciconf reports display controllers as class=0x03xxxx */
-			if (strstr(class_line, "0x03") != NULL) {
-				char *q1 = strchr(device_line, '\'');
-				char *q2 = q1 ? strchr(q1 + 1, '\'') : NULL;
-				if (q1 && q2 && q2 > q1) {
-					*q2 = '\0';
-					snprintf(buf, sz, "%s", q1 + 1);
-					found = 1;
-					break;
-				}
-			}
-			class_line[0] = '\0';
-			device_line[0] = '\0';
 		}
 	}
 	pclose(p);
-
+ 
+	char *src = device_line[0] ? device_line : (vendor_line[0] ? vendor_line : NULL);
+	if (src) {
+		char *q1 = strchr(src, '\'');
+		char *q2 = q1 ? strchr(q1 + 1, '\'') : NULL;
+		if (q1 && q2 && q2 > q1) {
+			*q2 = '\0';
+			snprintf(buf, sz, "%s", q1 + 1);
+			found = 1;
+		}
+	}
+ 
 	if (!found)
 		snprintf(buf, sz, "unknown");
 }
