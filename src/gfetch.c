@@ -1,16 +1,23 @@
-/* gfetch.c: the classic Glenda Fetch re-implemented in C for FreeBSD.*/
-
+/* gfetch_freebsd.c: the classic Glenda Fetch re-implemented in C for FreeBSD. */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
 #include <sys/param.h>
 #include <sys/sysctl.h>
 #include <sys/utsname.h>
 #include <sys/statvfs.h>
 #include <sys/types.h>
+#include <sys/pciio.h>
+#if __has_include(<dev/pci/pcireg.h>)
+	#include <dev/pci/pcireg.h> 
+#else
+	#include <bus/pci/pcireg.h>
+#endif
 
 /* Helpers */
 
@@ -187,61 +194,50 @@ get_disk(char *buf, size_t sz)
 	snprintf(buf, sz, "%.1f / %.1f GiB", used_gib, total_gib);
 }
 
-
-
 /* GPU */
+
 static void
 get_gpu(char *buf, size_t sz)
 {
-	FILE *p;
-	char line[512];
-	char driver[64] = {0};
-	char pci_id[16] = {0};
-	int found = 0;
- 
-	p = popen("pciconf -lv 2>/dev/null", "r");
-	if (!p) {
+	int fd = open("/dev/pci", O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
 		snprintf(buf, sz, "unknown");
 		return;
 	}
- 
-	while (fgets(line, sizeof(line), p)) {
-		if (line[0] == '\t' || line[0] == ' ')
-			continue;
- 
-		if (strstr(line, "class=0x03") == NULL)
-			continue; 
- 
-		char *at = strchr(line, '@');
-		if (at) {
-			size_t len = (size_t)(at - line);
-			if (len >= sizeof(driver)) len = sizeof(driver) - 1;
-			memcpy(driver, line, len);
-			driver[len] = '\0';
-			size_t n = strlen(driver);
-			while (n > 0 && driver[n-1] >= '0' && driver[n-1] <= '9')
-				driver[--n] = '\0';
-		}
- 
-		char *vendor_pos = strstr(line, "vendor=0x");
-		if (vendor_pos)
-			snprintf(pci_id, sizeof(pci_id), "%.4s", vendor_pos + 9);
- 
-		found = (driver[0] != '\0');
-		break;
-	}
-	pclose(p);
- 
-	if (!found) {
+
+	struct pci_conf confs[16];
+	struct pci_match_conf match = {
+		.pc_class = PCIC_DISPLAY,
+		.flags = PCI_GETCONF_MATCH_CLASS,
+	};
+	struct pci_conf_io pcio = {
+		.pat_buf_len = sizeof(match),
+		.num_patterns = 1,
+		.patterns = &match,
+		.match_buf_len = sizeof(confs),
+		.matches = confs,
+	};
+
+	if (ioctl(fd, PCIOCGETCONF, &pcio) < 0 || pcio.status == PCI_GETCONF_ERROR ||
+	    pcio.num_matches == 0) {
+		close(fd);
 		snprintf(buf, sz, "unknown");
 		return;
 	}
- 
+	close(fd);
+
+	struct pci_conf *pc = &confs[0];
+
 	const char *vendor = "";
-	if      (strncasecmp(pci_id, "8086", 4) == 0) vendor = "Intel";
-	else if (strncasecmp(pci_id, "1002", 4) == 0) vendor = "AMD";
-	else if (strncasecmp(pci_id, "10de", 4) == 0) vendor = "NVIDIA";
- 
+	switch (pc->pc_vendor) {
+	case 0x8086: vendor = "Intel";  break;
+	case 0x1002: vendor = "AMD";    break;
+	case 0x10de: vendor = "NVIDIA"; break;
+	}
+
+	char driver[sizeof(pc->pd_name) + 1] = {0};
+	snprintf(driver, sizeof(driver), "%s", pc->pd_name);
+
 	if (vendor[0] && driver[0])
 		snprintf(buf, sz, "%s (%s)", vendor, driver);
 	else if (vendor[0])
@@ -251,7 +247,6 @@ get_gpu(char *buf, size_t sz)
 	else
 		snprintf(buf, sz, "unknown");
 }
-
 
 /* Glenda the rabbit */
 
