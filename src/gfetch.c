@@ -188,8 +188,9 @@ get_disk(char *buf, size_t sz)
 }
 
 
+
 /* GPU */
- 
+
 static void
 get_gpu(char *buf, size_t sz)
 {
@@ -208,6 +209,9 @@ get_gpu(char *buf, size_t sz)
  
 	while (fgets(line, sizeof(line), p)) {
 		if (line[0] != '\t' && line[0] != ' ') {
+			if (in_display_block && (device_line[0] || vendor_line[0]))
+				break;
+ 
 			char *class_pos = strstr(line, "class=0x03");
 			in_display_block = (class_pos != NULL);
 			vendor_line[0] = '\0';
@@ -243,6 +247,9 @@ get_gpu(char *buf, size_t sz)
 	if (!found)
 		snprintf(buf, sz, "unknown");
 }
+
+
+
 
 /* Glenda the rabbit */
 
