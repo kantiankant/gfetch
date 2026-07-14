@@ -190,15 +190,13 @@ get_disk(char *buf, size_t sz)
 
 
 /* GPU */
-
 static void
 get_gpu(char *buf, size_t sz)
 {
 	FILE *p;
 	char line[512];
-	char vendor_line[512] = {0};
-	char device_line[512] = {0};
-	int in_display_block = 0;
+	char driver[64] = {0};
+	char pci_id[16] = {0};
 	int found = 0;
  
 	p = popen("pciconf -lv 2>/dev/null", "r");
@@ -208,47 +206,51 @@ get_gpu(char *buf, size_t sz)
 	}
  
 	while (fgets(line, sizeof(line), p)) {
-		if (line[0] != '\t' && line[0] != ' ') {
-			if (in_display_block && (device_line[0] || vendor_line[0]))
-				break;
- 
-			char *class_pos = strstr(line, "class=0x03");
-			in_display_block = (class_pos != NULL);
-			vendor_line[0] = '\0';
-			device_line[0] = '\0';
-			continue;
-		}
- 
-		if (!in_display_block)
+		if (line[0] == '\t' || line[0] == ' ')
 			continue;
  
-		char *trimmed = line;
-		while (*trimmed == '\t' || *trimmed == ' ') trimmed++;
+		if (strstr(line, "class=0x03") == NULL)
+			continue; 
  
-		if (strncmp(trimmed, "vendor", 6) == 0 && strchr(trimmed, '=')) {
-			snprintf(vendor_line, sizeof(vendor_line), "%s", trimmed);
-		} else if (strncmp(trimmed, "device", 6) == 0 && strchr(trimmed, '=')) {
-			snprintf(device_line, sizeof(device_line), "%s", trimmed);
+		char *at = strchr(line, '@');
+		if (at) {
+			size_t len = (size_t)(at - line);
+			if (len >= sizeof(driver)) len = sizeof(driver) - 1;
+			memcpy(driver, line, len);
+			driver[len] = '\0';
+			size_t n = strlen(driver);
+			while (n > 0 && driver[n-1] >= '0' && driver[n-1] <= '9')
+				driver[--n] = '\0';
 		}
+ 
+		char *vendor_pos = strstr(line, "vendor=0x");
+		if (vendor_pos)
+			snprintf(pci_id, sizeof(pci_id), "%.4s", vendor_pos + 9);
+ 
+		found = (driver[0] != '\0');
+		break;
 	}
 	pclose(p);
  
-	char *src = device_line[0] ? device_line : (vendor_line[0] ? vendor_line : NULL);
-	if (src) {
-		char *q1 = strchr(src, '\'');
-		char *q2 = q1 ? strchr(q1 + 1, '\'') : NULL;
-		if (q1 && q2 && q2 > q1) {
-			*q2 = '\0';
-			snprintf(buf, sz, "%s", q1 + 1);
-			found = 1;
-		}
+	if (!found) {
+		snprintf(buf, sz, "unknown");
+		return;
 	}
  
-	if (!found)
+	const char *vendor = "";
+	if      (strncasecmp(pci_id, "8086", 4) == 0) vendor = "Intel";
+	else if (strncasecmp(pci_id, "1002", 4) == 0) vendor = "AMD";
+	else if (strncasecmp(pci_id, "10de", 4) == 0) vendor = "NVIDIA";
+ 
+	if (vendor[0] && driver[0])
+		snprintf(buf, sz, "%s (%s)", vendor, driver);
+	else if (vendor[0])
+		snprintf(buf, sz, "%s", vendor);
+	else if (driver[0])
+		snprintf(buf, sz, "%s", driver);
+	else
 		snprintf(buf, sz, "unknown");
 }
-
-
 
 
 /* Glenda the rabbit */
